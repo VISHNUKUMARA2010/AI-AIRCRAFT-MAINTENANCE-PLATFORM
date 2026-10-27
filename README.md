@@ -4,3 +4,5 @@ AI Aircraft Maintenance Application
 
 This app help to find out the information of the aircraft you can test by excel or pdf.
 the both file is in my repo for test
+Excel file location: backend/data/aircraft_maintenance_intelligence_dataset.xlsx
+PDF file location: 
