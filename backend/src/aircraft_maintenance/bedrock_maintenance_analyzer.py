@@ -207,7 +207,7 @@ Return exactly one JSON object with this schema:
         except (ClientError, BotoCoreError) as exc:
             logger.exception("Bedrock invocation failed")
             raise RuntimeError(
-                f"Unable to invoke Bedrock model '{self.model_id}'"
+                f"Unable to invoke Bedrock model '{self.model_id}': {exc}"
             ) from exc
 
         response_text = self._extract_response_text(response)

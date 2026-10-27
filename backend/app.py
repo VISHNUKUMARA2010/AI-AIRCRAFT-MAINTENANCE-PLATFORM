@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
+import logging
 from typing import Any
 
 import boto3
@@ -21,6 +22,9 @@ from dotenv import load_dotenv
 
 from src.aircraft_maintenance.bedrock_maintenance_analyzer import AircraftMaintenanceAnalyzer
 from src.aircraft_maintenance.engineering_analytics import AircraftEngineeringAnalytics
+from src.aircraft_maintenance.rule_based_analyzer import RuleBasedMaintenanceAnalyzer
+
+logger = logging.getLogger("aircraft_maintenance_api")
 
 # Load environment variables from .env file
 load_dotenv()
@@ -146,10 +150,18 @@ def maintenance_prediction(payload: dict[str, Any]) -> dict[str, Any]:
             detail=f"Maintenance manual not found at: {manual_pdf_path}.",
         )
 
+    force_rule_engine = os.getenv("USE_RULE_ENGINE", "false").lower() in ("true", "1", "yes")
+    if force_rule_engine:
+        logger.info("Directly using RuleBasedMaintenanceAnalyzer (offline / zero-cost mode)")
+        analyzer = RuleBasedMaintenanceAnalyzer(manual_pdf_path=manual_pdf_path)
+        report = analyzer.analyze(engineering_json)
+        return {"success": True, "report": report}
+
     try:
         aws_region = os.getenv("AWS_REGION", "us-east-1")
         aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
         aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+        aws_session_token = os.getenv("AWS_SESSION_TOKEN")
         bedrock_model_id = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-pro-v1:0")
 
         boto3_kwargs = {
@@ -162,6 +174,8 @@ def maintenance_prediction(payload: dict[str, Any]) -> dict[str, Any]:
         if aws_access_key and aws_access_key != "YOUR_ACCESS_KEY" and aws_secret_key and aws_secret_key != "YOUR_SECRET_KEY":
             boto3_kwargs["aws_access_key_id"] = aws_access_key
             boto3_kwargs["aws_secret_access_key"] = aws_secret_key
+            if aws_session_token:
+                boto3_kwargs["aws_session_token"] = aws_session_token
 
         bedrock_client = boto3.client(**boto3_kwargs)
 
@@ -181,10 +195,19 @@ def maintenance_prediction(payload: dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Maintenance prediction failed: {exc}",
-        ) from exc
+        logger.warning("Bedrock invocation failed: %s. Falling back to Rule-Based Maintenance Engine.", exc)
+        try:
+            fallback_analyzer = RuleBasedMaintenanceAnalyzer(manual_pdf_path=manual_pdf_path)
+            report = fallback_analyzer.analyze(engineering_json)
+            report["confidence"]["rationale"] = (
+                f"Generated using the AeroTech ATX200 Maintenance Manual Engine (Free / Offline Mode)."
+            )
+            return {"success": True, "report": report}
+        except Exception as fallback_exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Maintenance prediction failed: {exc} (Fallback failed: {fallback_exc})",
+            ) from exc
 
 
 if __name__ == "__main__":
